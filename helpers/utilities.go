@@ -1762,6 +1762,59 @@ func CreateResultMap(_ *testConfig.TestConfig, c dynclient.Client, suiteName str
 	return resultMap, nil
 }
 
+// CheckRulesForInstructions checks that all compliance check results have instructions.
+// Compliance check results in the exception list are skipped from the instruction check.
+func CheckRulesForInstructions(tc *testConfig.TestConfig, c dynclient.Client, suiteName string) error {
+	exceptionList := map[string]bool{
+		"rhcos-node-master-bios-disable-usb-boot": true,
+		"rhcos-node-master-wireless-disable-in-bios": true,
+		"rhcos-node-worker-bios-disable-usb-boot": true,
+		"rhcos-node-worker-wireless-disable-in-bios": true,
+	}
+
+	labelSelector, err := labels.Parse(cmpv1alpha1.SuiteLabel + "=" + suiteName)
+	if err != nil {
+		return fmt.Errorf("failed to parse label selector: %w", err)
+	}
+
+	resultList := &cmpv1alpha1.ComplianceCheckResultList{}
+	opts := &dynclient.ListOptions{
+		LabelSelector: labelSelector,
+		Namespace:     tc.OperatorNamespace.Namespace,
+	}
+	err = c.List(goctx.TODO(), resultList, opts)
+	if err != nil {
+		return fmt.Errorf("failed to get compliance check results for suite %s: %w", suiteName, err)
+	}
+
+	if len(resultList.Items) == 0 {
+		log.Printf("No compliance check results found for suite %s", suiteName)
+		return nil
+	}
+
+	// Check each result for instructions
+	var missingInstructions []string
+	for i := range resultList.Items {
+		result := &resultList.Items[i]
+		
+		if exceptionList[result.Name] {
+			continue
+		}
+
+		if result.Instructions == "" {
+			missingInstructions = append(missingInstructions, result.Name)
+			log.Printf("Compliance check result '%s' does not have instructions", result.Name)
+		}
+	}
+
+	if len(missingInstructions) > 0 {
+		return fmt.Errorf("found %d compliance check result(s) without instructions for suite %s: %v",
+			len(missingInstructions), suiteName, missingInstructions)
+	}
+
+	return nil
+}
+
 // SaveResultAsYAML saves YAML data about the scan results to a file in the configured log directory.
 func SaveResultAsYAML(tc *testConfig.TestConfig, results map[string]string, filename string) error {
 	p := path.Join(tc.LogDir, filename)
